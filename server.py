@@ -352,16 +352,92 @@ def cached_related_queries_for_keyword(
     return data
 
 
+def is_breakout_label(value: str) -> bool:
+    v = normalize_text(value or "")
+    return v in ("breakout", "hizli artis", "hızlı artış")
+
+
+def merge_related_rows(rows: list[dict], field: str) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for rel in rows:
+        source_kw = rel.get("keyword", "")
+        items = rel.get(field, []) or []
+        for idx, item in enumerate(items):
+            q = (item.get("query") or "").strip()
+            if not q:
+                continue
+            key = normalize_text(q)
+            score = int(item.get("value", 0) or 0)
+            formatted = item.get("formatted_value", "")
+            entry = merged.get(key)
+            if not entry:
+                entry = {
+                    "query": q,
+                    "value": score,
+                    "formatted_value": formatted,
+                    "from_keywords": [],
+                    "best_rank": idx + 1,
+                    "is_breakout": is_breakout_label(formatted),
+                }
+                merged[key] = entry
+            entry["value"] = max(entry.get("value", 0), score)
+            entry["best_rank"] = min(entry.get("best_rank", idx + 1), idx + 1)
+            entry["is_breakout"] = entry.get("is_breakout", False) or is_breakout_label(formatted)
+            if formatted and not entry.get("formatted_value"):
+                entry["formatted_value"] = formatted
+            if source_kw and source_kw not in entry["from_keywords"]:
+                entry["from_keywords"].append(source_kw)
+    return list(merged.values())
+
+
+def sort_discover_items(items: list[dict], field: str) -> list[dict]:
+    if field == "rising":
+        items.sort(
+            key=lambda x: (
+                1 if x.get("is_breakout") else 0,
+                int(x.get("value", 0) or 0),
+                len(x.get("from_keywords", [])),
+                -int(x.get("best_rank", 999)),
+            ),
+            reverse=True,
+        )
+    else:
+        items.sort(
+            key=lambda x: (
+                int(x.get("value", 0) or 0),
+                len(x.get("from_keywords", [])),
+                -int(x.get("best_rank", 999)),
+            ),
+            reverse=True,
+        )
+    return items
+
+
+def paginate(items: list[dict], page: int, per_page: int) -> dict:
+    total = len(items)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    end = start + per_page
+    return {
+        "items": items[start:end],
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+    }
+
+
 def build_discover_queries(
-    keywords: list[str], timeframe: str, mode: str = "rising", force_refresh: bool = False
+    keywords: list[str], timeframe: str, force_refresh: bool = False, page: int = 1, per_page: int = 25
 ) -> dict:
     if not keywords:
         return {
             "generated_at": now_iso(),
             "timeframe": timeframe,
-            "mode": mode,
             "source_keywords": [],
-            "items": [],
+            "top": paginate([], page, per_page),
+            "rising": paginate([], page, per_page),
         }
 
     rows = []
@@ -377,48 +453,15 @@ def build_discover_queries(
         except Exception:
             rows.append({"keyword": kw, "top": [], "rising": []})
 
-    pick_mode = "top" if mode == "top" else "rising"
-    merged: dict[str, dict] = {}
-    for rel in rows:
-        source_kw = rel.get("keyword", "")
-        items = rel.get(pick_mode, []) or []
-        for item in items:
-            q = (item.get("query") or "").strip()
-            if not q:
-                continue
-            key = normalize_text(q)
-            score = item.get("value", 0) or 0
-            entry = merged.get(key)
-            if not entry:
-                entry = {
-                    "query": q,
-                    "value": score,
-                    "formatted_value": item.get("formatted_value", ""),
-                    "from_keywords": [],
-                }
-                merged[key] = entry
-            entry["value"] = max(entry.get("value", 0), score)
-            if item.get("formatted_value"):
-                entry["formatted_value"] = item.get("formatted_value")
-            if source_kw and source_kw not in entry["from_keywords"]:
-                entry["from_keywords"].append(source_kw)
-
-    items = list(merged.values())
-    items.sort(
-        key=lambda x: (
-            1 if str(x.get("formatted_value", "")).lower() in ("breakout", "hizli artis", "hızlı artış") else 0,
-            int(x.get("value", 0) or 0),
-            len(x.get("from_keywords", [])),
-        ),
-        reverse=True,
-    )
+    top_items = sort_discover_items(merge_related_rows(rows, "top"), "top")
+    rising_items = sort_discover_items(merge_related_rows(rows, "rising"), "rising")
 
     return {
         "generated_at": now_iso(),
         "timeframe": timeframe,
-        "mode": pick_mode,
         "source_keywords": keywords,
-        "items": items,
+        "top": paginate(top_items, page, per_page),
+        "rising": paginate(rising_items, page, per_page),
     }
 
 
@@ -824,12 +867,13 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/discover":
             query = parse_qs(parsed.query)
             timeframe_key = (query.get("timeframe", ["1h"])[0] or "1h").strip().lower()
-            mode = (query.get("mode", ["rising"])[0] or "rising").strip().lower()
             force_refresh = (query.get("force", ["0"])[0] or "0") == "1"
             selected_keyword = (query.get("keyword", [""])[0] or "").strip()
+            page = int((query.get("page", ["1"])[0] or "1"))
+            per_page = int((query.get("per_page", ["25"])[0] or "25"))
+            per_page = 50 if per_page >= 50 else 25
 
             timeframe = "now 4-H" if timeframe_key == "4h" else "now 1-H"
-            mode = "top" if mode == "top" else "rising"
 
             if selected_keyword:
                 keywords = [selected_keyword]
@@ -844,8 +888,9 @@ class AppHandler(BaseHTTPRequestHandler):
             data = build_discover_queries(
                 keywords=keywords,
                 timeframe=timeframe,
-                mode=mode,
                 force_refresh=force_refresh,
+                page=page,
+                per_page=per_page,
             )
             json_response(self, data)
             return

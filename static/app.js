@@ -4,8 +4,10 @@ const state = {
   scanning: false,
   savedSet: new Set(),
   keywords: [],
-  discoverMode: "rising",
   discoverTimeframe: "1h",
+  discoverPerPage: 25,
+  discoverPage: 1,
+  discoverTotalPages: 1,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -28,7 +30,8 @@ async function api(path, opts = {}) {
 function discoverQuery(force = false) {
   const params = new URLSearchParams();
   params.set("timeframe", state.discoverTimeframe);
-  params.set("mode", state.discoverMode);
+  params.set("per_page", String(state.discoverPerPage));
+  params.set("page", String(state.discoverPage));
   if (state.keywordFilter) params.set("keyword", state.keywordFilter);
   if (force) params.set("force", "1");
   return `discover?${params.toString()}`;
@@ -134,34 +137,43 @@ function renderNews(items, total) {
     .join("");
 }
 
-function renderDiscover(payload) {
-  const root = $("discoverList");
-  const mode = state.discoverMode === "top" ? "top" : "rising";
-  const list = payload?.items || [];
-  const src = payload?.source_keywords || [];
-  $("discoverMeta").textContent = state.keywordFilter
-    ? `Kaynak keyword: ${state.keywordFilter}`
-    : `Kaynak keyword: ${src.length}`;
-
-  if (!list.length) {
+function renderDiscoverList(rootId, list) {
+  const root = $(rootId);
+  const items = list || [];
+  if (!items.length) {
     root.innerHTML = '<p class="muted">Bu aralıkta keşif sorgusu bulunamadı.</p>';
     return;
   }
-
-  root.innerHTML = list
-    .slice(0, 20)
+  root.innerHTML = items
     .map((it) => {
       const fv = it.formatted_value || it.value || 0;
+      const breakout = String(fv).toLowerCase() === "breakout" || String(fv).toLowerCase() === "hızlı artış";
       return `
       <div class="related-row">
         <div class="related-q">${escapeHtml(it.query)} <span class="muted">(${escapeHtml((it.from_keywords || []).slice(0,2).join(", "))})</span></div>
         <div class="related-right">
-          <span class="trend-chip">${escapeHtml(mode === "rising" ? String(fv || "HIZLI ARTIŞ") : String(fv))}</span>
+          <span class="trend-chip ${breakout ? "up" : ""}">${escapeHtml(String(fv))}</span>
           <button class="btn btn-primary related-add-btn" data-q="${escapeHtml(it.query)}">+ Ekle</button>
         </div>
       </div>`;
     })
     .join("");
+}
+
+function renderDiscover(payload) {
+  const src = payload?.source_keywords || [];
+  $("discoverMeta").textContent = state.keywordFilter
+    ? `Kaynak keyword: ${state.keywordFilter}`
+    : `Kaynak keyword: ${src.length}`;
+  const rising = payload?.rising || {};
+  const top = payload?.top || {};
+  state.discoverPage = Number(rising.page || top.page || 1);
+  state.discoverTotalPages = Number(rising.total_pages || top.total_pages || 1);
+  $("discoverRisingMeta").textContent = `${rising.total || 0} sonuç`;
+  $("discoverTopMeta").textContent = `${top.total || 0} sonuç`;
+  $("discoverPageInfo").textContent = `Sayfa ${state.discoverPage} / ${state.discoverTotalPages}`;
+  renderDiscoverList("discoverRisingList", rising.items || []);
+  renderDiscoverList("discoverTopList", top.items || []);
 }
 
 function escapeHtml(text) {
@@ -318,29 +330,31 @@ function bindEvents() {
     }
   });
 
-  document.querySelectorAll("[data-discover-mode]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      document.querySelectorAll("[data-discover-mode]").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.discoverMode = btn.dataset.discoverMode || "rising";
-      const discover = await api(discoverQuery(false));
-      renderDiscover(discover);
-    });
-  });
-
   document.querySelectorAll("[data-discover-timeframe]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       document.querySelectorAll("[data-discover-timeframe]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.discoverTimeframe = btn.dataset.discoverTimeframe || "1h";
+      state.discoverPage = 1;
       const discover = await api(discoverQuery(false));
       renderDiscover(discover);
     });
   });
 
-  document.querySelectorAll(".fbtn").forEach((btn) => {
+  document.querySelectorAll("[data-discover-per-page]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll("[data-discover-per-page]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.discoverPerPage = Number(btn.dataset.discoverPerPage || 25);
+      state.discoverPage = 1;
+      const discover = await api(discoverQuery(false));
+      renderDiscover(discover);
+    });
+  });
+
+  document.querySelectorAll(".news-panel .fbtn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".fbtn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".news-panel .fbtn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.filter = btn.dataset.filter || "all";
       loadAll();
@@ -358,15 +372,36 @@ function bindEvents() {
     if (!chip) return;
     const kw = chip.dataset.keyword;
     state.keywordFilter = state.keywordFilter === kw ? "" : kw;
+    state.discoverPage = 1;
     loadAll();
   });
 
-  $("discoverList").addEventListener("click", (e) => {
+  $("discoverRisingList").addEventListener("click", (e) => {
     const addBtn = e.target.closest(".related-add-btn");
     if (!addBtn) return;
     const q = (addBtn.dataset.q || "").trim();
     if (!q) return;
     addKeywordValue(q, false);
+  });
+  $("discoverTopList").addEventListener("click", (e) => {
+    const addBtn = e.target.closest(".related-add-btn");
+    if (!addBtn) return;
+    const q = (addBtn.dataset.q || "").trim();
+    if (!q) return;
+    addKeywordValue(q, false);
+  });
+
+  $("discoverPrevBtn").addEventListener("click", async () => {
+    if (state.discoverPage <= 1) return;
+    state.discoverPage -= 1;
+    const discover = await api(discoverQuery(false));
+    renderDiscover(discover);
+  });
+  $("discoverNextBtn").addEventListener("click", async () => {
+    if (state.discoverPage >= state.discoverTotalPages) return;
+    state.discoverPage += 1;
+    const discover = await api(discoverQuery(false));
+    renderDiscover(discover);
   });
 
   $("newsList").addEventListener("click", (e) => {
