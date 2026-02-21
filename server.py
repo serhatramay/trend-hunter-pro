@@ -36,6 +36,7 @@ TRENDS_CACHE: dict = {
     "sig": "",
     "data": {"generated_at": "", "items": []},
 }
+RELATED_CACHE: dict = {}
 
 
 def now_iso() -> str:
@@ -254,6 +255,101 @@ def fetch_last_hour_interest_for_batch(keywords: list[str], geo: str = "TR", tim
                     v = 0
             values_by_keyword[kw].append(v)
     return values_by_keyword
+
+
+def trends_explore_widgets_for_keywords(
+    keywords: list[str], geo: str = "TR", timeframe: str = "now 1-H"
+) -> list[dict]:
+    if not keywords:
+        return []
+    comparison = [
+        {"keyword": kw, "geo": geo, "time": timeframe}
+        for kw in keywords
+    ]
+    req_payload = {"comparisonItem": comparison, "category": 0, "property": ""}
+    params = urlencode(
+        {
+            "hl": "tr-TR",
+            "tz": "-180",
+            "req": json.dumps(req_payload, ensure_ascii=False, separators=(",", ":")),
+        }
+    )
+    explore_url = f"https://trends.google.com/trends/api/explore?{params}"
+    explore_raw = fetch_xml(explore_url)
+    explore = parse_trends_json(explore_raw)
+    return explore.get("widgets", [])
+
+
+def fetch_related_queries_for_keyword(
+    keyword: str, geo: str = "TR", timeframe: str = "now 1-H"
+) -> dict:
+    widgets = trends_explore_widgets_for_keywords([keyword], geo=geo, timeframe=timeframe)
+    related_widget = None
+    for w in widgets:
+        if w.get("id") == "RELATED_QUERIES":
+            related_widget = w
+            break
+
+    if not related_widget:
+        return {"keyword": keyword, "top": [], "rising": [], "generated_at": now_iso()}
+
+    req_payload = related_widget.get("request", {})
+    token = related_widget.get("token", "")
+    if not token:
+        return {"keyword": keyword, "top": [], "rising": [], "generated_at": now_iso()}
+
+    params = urlencode(
+        {
+            "hl": "tr-TR",
+            "tz": "-180",
+            "req": json.dumps(req_payload, ensure_ascii=False, separators=(",", ":")),
+            "token": token,
+        }
+    )
+    url = f"https://trends.google.com/trends/api/widgetdata/relatedsearches?{params}"
+    raw = fetch_xml(url)
+    data = parse_trends_json(raw)
+
+    ranked = data.get("default", {}).get("rankedList", [])
+    top_raw = ranked[0].get("rankedKeyword", []) if len(ranked) > 0 else []
+    rising_raw = ranked[1].get("rankedKeyword", []) if len(ranked) > 1 else []
+
+    def normalize_items(items: list[dict]) -> list[dict]:
+        out = []
+        for it in items:
+            q = (it.get("query") or "").strip()
+            if not q:
+                continue
+            out.append(
+                {
+                    "query": q,
+                    "value": it.get("value", 0),
+                    "formatted_value": (it.get("formattedValue") or "").strip(),
+                    "link": it.get("link", ""),
+                }
+            )
+        return out
+
+    return {
+        "keyword": keyword,
+        "generated_at": now_iso(),
+        "top": normalize_items(top_raw),
+        "rising": normalize_items(rising_raw),
+    }
+
+
+def cached_related_queries_for_keyword(
+    keyword: str, geo: str = "TR", timeframe: str = "now 1-H", ttl_seconds: int = 300, force_refresh: bool = False
+) -> dict:
+    k = f"{normalize_text(keyword)}|{geo}|{timeframe}"
+    now_ts = time.time()
+    item = RELATED_CACHE.get(k)
+    if not force_refresh and item and now_ts - item.get("ts", 0.0) < ttl_seconds:
+        return item.get("data", {})
+
+    data = fetch_related_queries_for_keyword(keyword=keyword, geo=geo, timeframe=timeframe)
+    RELATED_CACHE[k] = {"ts": now_ts, "data": data}
+    return data
 
 
 def build_last_hour_trends(keywords: list[str]) -> dict:
@@ -613,6 +709,45 @@ class AppHandler(BaseHTTPRequestHandler):
             keywords = [r["keyword"] for r in rows]
             data = cached_last_hour_trends(keywords, force_refresh=force_refresh)
             json_response(self, data)
+            return
+
+        if path == "/api/trends/related":
+            query = parse_qs(parsed.query)
+            keyword = (query.get("keyword", [""])[0] or "").strip()
+            force_refresh = (query.get("force", ["0"])[0] or "0") == "1"
+
+            if not keyword:
+                conn = get_conn()
+                row = conn.execute(
+                    "SELECT keyword FROM keywords ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
+                conn.close()
+                keyword = row["keyword"] if row else ""
+
+            if not keyword:
+                json_response(self, {"keyword": "", "generated_at": now_iso(), "top": [], "rising": []})
+                return
+
+            try:
+                data = cached_related_queries_for_keyword(
+                    keyword=keyword,
+                    geo="TR",
+                    timeframe="now 1-H",
+                    force_refresh=force_refresh,
+                )
+                json_response(self, data)
+            except Exception as exc:
+                json_response(
+                    self,
+                    {
+                        "keyword": keyword,
+                        "generated_at": now_iso(),
+                        "top": [],
+                        "rising": [],
+                        "error": str(exc),
+                    },
+                    200,
+                )
             return
 
         if path == "/api/news":

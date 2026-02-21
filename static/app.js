@@ -3,6 +3,8 @@ const state = {
   keywordFilter: "",
   scanning: false,
   savedSet: new Set(),
+  keywords: [],
+  relatedMode: "rising",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -148,6 +150,34 @@ function renderTrends(payload) {
     .join("");
 }
 
+function renderRelated(payload) {
+  const root = $("relatedList");
+  const kw = payload?.keyword || "";
+  const mode = state.relatedMode === "top" ? "top" : "rising";
+  const list = payload?.[mode] || [];
+  $("relatedMeta").textContent = `Keyword: ${kw || "-"}`;
+
+  if (!list.length) {
+    root.innerHTML = '<p class="muted">Bu keyword için ilişkili sorgu bulunamadı.</p>';
+    return;
+  }
+
+  root.innerHTML = list
+    .slice(0, 20)
+    .map((it) => {
+      const fv = it.formatted_value || it.value || 0;
+      return `
+      <div class="related-row">
+        <div class="related-q">${escapeHtml(it.query)}</div>
+        <div class="related-right">
+          <span class="trend-chip">${escapeHtml(String(fv))}</span>
+          <button class="btn btn-primary related-add-btn" data-q="${escapeHtml(it.query)}">+ Ekle</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, "&amp;")
@@ -180,31 +210,43 @@ async function loadAll() {
     updateStatusBadge(status.is_scanning || state.scanning);
 
     state.savedSet = new Set((news.news || []).filter((n) => n.saved === 1).map((n) => n.id));
+    state.keywords = (keywords.keywords || []).map((k) => k.keyword);
 
     renderKeywords(keywords.keywords || []);
     renderNews(news.news || [], news.total || 0);
     renderScans(scans.scans || []);
     renderTrends(trends);
+
+    const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
+    const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}`);
+    renderRelated(related);
   } catch (err) {
     toast(err.message || "Veri çekilemedi");
   }
 }
 
-async function addKeyword() {
-  const inp = $("kwInput");
-  const keyword = inp.value.trim();
+async function addKeywordValue(keyword, clearInput = true) {
   if (!keyword) return;
   try {
     await api("keywords", {
       method: "POST",
       body: JSON.stringify({ keyword }),
     });
-    inp.value = "";
+    if (clearInput) {
+      const inp = $("kwInput");
+      if (inp) inp.value = "";
+    }
     toast("Kelime eklendi");
     await loadAll();
   } catch (err) {
     toast(err.message || "Kelime eklenemedi");
   }
+}
+
+async function addKeyword() {
+  const inp = $("kwInput");
+  const keyword = inp.value.trim();
+  await addKeywordValue(keyword, true);
 }
 
 async function deleteKeyword(keyword) {
@@ -294,6 +336,28 @@ function bindEvents() {
     }
   });
 
+  $("refreshRelatedBtn").addEventListener("click", async () => {
+    try {
+      const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
+      const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}&force=1`);
+      renderRelated(related);
+      toast("İlişkili sorgular güncellendi");
+    } catch (err) {
+      toast(err.message || "İlişkili sorgular alınamadı");
+    }
+  });
+
+  document.querySelectorAll("[data-rel-mode]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll("[data-rel-mode]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.relatedMode = btn.dataset.relMode || "rising";
+      const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
+      const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}`);
+      renderRelated(related);
+    });
+  });
+
   document.querySelectorAll(".fbtn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".fbtn").forEach((b) => b.classList.remove("active"));
@@ -315,6 +379,14 @@ function bindEvents() {
     const kw = chip.dataset.keyword;
     state.keywordFilter = state.keywordFilter === kw ? "" : kw;
     loadAll();
+  });
+
+  $("relatedList").addEventListener("click", (e) => {
+    const addBtn = e.target.closest(".related-add-btn");
+    if (!addBtn) return;
+    const q = (addBtn.dataset.q || "").trim();
+    if (!q) return;
+    addKeywordValue(q, false);
   });
 
   $("newsList").addEventListener("click", (e) => {
