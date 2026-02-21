@@ -826,16 +826,20 @@ class AppHandler(BaseHTTPRequestHandler):
             timeframe_key = (query.get("timeframe", ["1h"])[0] or "1h").strip().lower()
             mode = (query.get("mode", ["rising"])[0] or "rising").strip().lower()
             force_refresh = (query.get("force", ["0"])[0] or "0") == "1"
+            selected_keyword = (query.get("keyword", [""])[0] or "").strip()
 
             timeframe = "now 4-H" if timeframe_key == "4h" else "now 1-H"
             mode = "top" if mode == "top" else "rising"
 
-            conn = get_conn()
-            rows = conn.execute(
-                "SELECT keyword FROM keywords ORDER BY created_at DESC LIMIT 30"
-            ).fetchall()
-            conn.close()
-            keywords = [r["keyword"] for r in rows]
+            if selected_keyword:
+                keywords = [selected_keyword]
+            else:
+                conn = get_conn()
+                rows = conn.execute(
+                    "SELECT keyword FROM keywords ORDER BY created_at DESC LIMIT 30"
+                ).fetchall()
+                conn.close()
+                keywords = [r["keyword"] for r in rows]
 
             data = build_discover_queries(
                 keywords=keywords,

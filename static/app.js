@@ -25,6 +25,15 @@ async function api(path, opts = {}) {
   return data;
 }
 
+function discoverQuery(force = false) {
+  const params = new URLSearchParams();
+  params.set("timeframe", state.discoverTimeframe);
+  params.set("mode", state.discoverMode);
+  if (state.keywordFilter) params.set("keyword", state.keywordFilter);
+  if (force) params.set("force", "1");
+  return `discover?${params.toString()}`;
+}
+
 function toast(msg) {
   const t = $("toast");
   t.textContent = msg;
@@ -130,7 +139,9 @@ function renderDiscover(payload) {
   const mode = state.discoverMode === "top" ? "top" : "rising";
   const list = payload?.items || [];
   const src = payload?.source_keywords || [];
-  $("discoverMeta").textContent = `Kaynak keyword: ${src.length}`;
+  $("discoverMeta").textContent = state.keywordFilter
+    ? `Kaynak keyword: ${state.keywordFilter}`
+    : `Kaynak keyword: ${src.length}`;
 
   if (!list.length) {
     root.innerHTML = '<p class="muted">Bu aralıkta keşif sorgusu bulunamadı.</p>';
@@ -170,7 +181,7 @@ async function loadAll() {
       api(`news?filter=${state.filter}&keyword=${encodeURIComponent(state.keywordFilter)}&limit=140`),
       api("scans"),
     ]);
-    const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
+    const discover = await api(discoverQuery(false));
 
     $("sTotal").textContent = status.total_news;
     $("sNew").textContent = status.new_count;
@@ -299,7 +310,7 @@ function bindEvents() {
 
   $("refreshDiscoverBtn").addEventListener("click", async () => {
     try {
-      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}&force=1`);
+      const discover = await api(discoverQuery(true));
       renderDiscover(discover);
       toast("Keşif verisi güncellendi");
     } catch (err) {
@@ -312,7 +323,7 @@ function bindEvents() {
       document.querySelectorAll("[data-discover-mode]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.discoverMode = btn.dataset.discoverMode || "rising";
-      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
+      const discover = await api(discoverQuery(false));
       renderDiscover(discover);
     });
   });
@@ -322,7 +333,7 @@ function bindEvents() {
       document.querySelectorAll("[data-discover-timeframe]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       state.discoverTimeframe = btn.dataset.discoverTimeframe || "1h";
-      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
+      const discover = await api(discoverQuery(false));
       renderDiscover(discover);
     });
   });
