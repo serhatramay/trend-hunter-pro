@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional, Union
-from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -31,6 +31,11 @@ USER_AGENT = (
 SCAN_LOCK = threading.Lock()
 IS_SCANNING = False
 LAST_AUTO_SCAN_AT = 0.0
+TRENDS_CACHE: dict = {
+    "ts": 0.0,
+    "sig": "",
+    "data": {"generated_at": "", "items": []},
+}
 
 
 def now_iso() -> str:
@@ -177,6 +182,141 @@ def fetch_google_trends(max_items: int = 40) -> list[str]:
         if title:
             trends.append(normalize_text(title))
     return trends
+
+
+def parse_trends_json(raw: bytes) -> dict:
+    text = raw.decode("utf-8", errors="ignore")
+    # Google Trends API prefix
+    text = re.sub(r"^\)\]\}',?\s*", "", text)
+    return json.loads(text)
+
+
+def chunked(items: list[str], size: int) -> list[list[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def fetch_last_hour_interest_for_batch(keywords: list[str], geo: str = "TR", timeframe: str = "now 1-H") -> dict[str, list[int]]:
+    if not keywords:
+        return {}
+
+    comparison = [
+        {"keyword": kw, "geo": geo, "time": timeframe}
+        for kw in keywords
+    ]
+    req_payload = {"comparisonItem": comparison, "category": 0, "property": ""}
+    params = urlencode(
+        {
+            "hl": "tr-TR",
+            "tz": "-180",
+            "req": json.dumps(req_payload, ensure_ascii=False, separators=(",", ":")),
+        }
+    )
+    explore_url = f"https://trends.google.com/trends/api/explore?{params}"
+    explore_raw = fetch_xml(explore_url)
+    explore = parse_trends_json(explore_raw)
+
+    widgets = explore.get("widgets", [])
+    timeseries_widget = None
+    for w in widgets:
+        if w.get("id") == "TIMESERIES":
+            timeseries_widget = w
+            break
+    if not timeseries_widget:
+        return {}
+
+    multi_req = timeseries_widget.get("request", {})
+    multi_token = timeseries_widget.get("token", "")
+    if not multi_token:
+        return {}
+
+    multi_params = urlencode(
+        {
+            "hl": "tr-TR",
+            "tz": "-180",
+            "req": json.dumps(multi_req, ensure_ascii=False, separators=(",", ":")),
+            "token": multi_token,
+        }
+    )
+    multi_url = f"https://trends.google.com/trends/api/widgetdata/multiline?{multi_params}"
+    multi_raw = fetch_xml(multi_url)
+    multi = parse_trends_json(multi_raw)
+
+    timeline = multi.get("default", {}).get("timelineData", [])
+    values_by_keyword: dict[str, list[int]] = {kw: [] for kw in keywords}
+    for row in timeline:
+        vals = row.get("value", [])
+        for idx, kw in enumerate(keywords):
+            v = 0
+            if idx < len(vals):
+                try:
+                    v = int(vals[idx])
+                except Exception:
+                    v = 0
+            values_by_keyword[kw].append(v)
+    return values_by_keyword
+
+
+def build_last_hour_trends(keywords: list[str]) -> dict:
+    if not keywords:
+        return {"generated_at": now_iso(), "items": []}
+
+    collected: dict[str, list[int]] = {}
+    for batch in chunked(keywords, 8):
+        try:
+            batch_vals = fetch_last_hour_interest_for_batch(batch, geo="TR", timeframe="now 1-H")
+            collected.update(batch_vals)
+        except Exception:
+            for kw in batch:
+                collected.setdefault(kw, [])
+
+    items = []
+    for kw in keywords:
+        series = collected.get(kw, [])
+        if not series:
+            item = {
+                "keyword": kw,
+                "latest_index": 0,
+                "avg_60m": 0.0,
+                "avg_20m": 0.0,
+                "delta_20m": 0.0,
+                "points": [],
+            }
+            items.append(item)
+            continue
+
+        latest = int(series[-1])
+        avg_60 = sum(series) / len(series)
+        tail_20 = series[-20:] if len(series) >= 20 else series
+        head_20 = series[:20] if len(series) >= 20 else series
+        avg_20 = sum(tail_20) / len(tail_20)
+        prev_20 = sum(head_20) / len(head_20)
+        delta_20 = avg_20 - prev_20
+
+        item = {
+            "keyword": kw,
+            "latest_index": latest,
+            "avg_60m": round(avg_60, 2),
+            "avg_20m": round(avg_20, 2),
+            "delta_20m": round(delta_20, 2),
+            "points": series,
+        }
+        items.append(item)
+
+    items.sort(key=lambda x: (x["latest_index"], x["avg_20m"]), reverse=True)
+    return {"generated_at": now_iso(), "items": items}
+
+
+def cached_last_hour_trends(keywords: list[str], ttl_seconds: int = 240, force_refresh: bool = False) -> dict:
+    sig = "|".join(sorted(normalize_text(k) for k in keywords))
+    now_ts = time.time()
+    if not force_refresh and TRENDS_CACHE["sig"] == sig and now_ts - TRENDS_CACHE["ts"] < ttl_seconds:
+        return TRENDS_CACHE["data"]
+
+    data = build_last_hour_trends(keywords)
+    TRENDS_CACHE["ts"] = now_ts
+    TRENDS_CACHE["sig"] = sig
+    TRENDS_CACHE["data"] = data
+    return data
 
 
 def calc_trend_score(title: str, keyword: str, published_at: str, trends: list[str], keyword_density: int) -> tuple[int, int]:
@@ -460,6 +600,19 @@ class AppHandler(BaseHTTPRequestHandler):
             ).fetchall()
             conn.close()
             json_response(self, {"keywords": [dict(r) for r in rows]})
+            return
+
+        if path == "/api/trends/last-hour":
+            query = parse_qs(parsed.query)
+            force_refresh = (query.get("force", ["0"])[0] or "0") == "1"
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT keyword FROM keywords ORDER BY created_at DESC"
+            ).fetchall()
+            conn.close()
+            keywords = [r["keyword"] for r in rows]
+            data = cached_last_hour_trends(keywords, force_refresh=force_refresh)
+            json_response(self, data)
             return
 
         if path == "/api/news":

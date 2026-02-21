@@ -122,6 +122,32 @@ function renderNews(items, total) {
     .join("");
 }
 
+function renderTrends(payload) {
+  const root = $("trendsList");
+  const items = payload?.items || [];
+  $("trendsAt").textContent = `Güncelleme: ${payload?.generated_at ? fmtDate(payload.generated_at) : "-"}`;
+
+  if (!items.length) {
+    root.innerHTML = '<p class="muted">Trend verisi yok.</p>';
+    return;
+  }
+
+  root.innerHTML = items
+    .map((it) => {
+      const deltaClass = it.delta_20m > 0 ? "up" : it.delta_20m < 0 ? "down" : "";
+      const deltaPrefix = it.delta_20m > 0 ? "+" : "";
+      return `
+      <div class="trend-row">
+        <div class="trend-key" title="${escapeHtml(it.keyword)}">${escapeHtml(it.keyword)}</div>
+        <span class="trend-chip">Anlık ${it.latest_index}</span>
+        <span class="trend-chip">60dk ${it.avg_60m}</span>
+        <span class="trend-chip">20dk ${it.avg_20m}</span>
+        <span class="trend-chip ${deltaClass}">Δ20 ${deltaPrefix}${it.delta_20m}</span>
+      </div>`;
+    })
+    .join("");
+}
+
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, "&amp;")
@@ -139,6 +165,7 @@ async function loadAll() {
       api(`news?filter=${state.filter}&keyword=${encodeURIComponent(state.keywordFilter)}&limit=140`),
       api("scans"),
     ]);
+    const trends = await api("trends/last-hour");
 
     $("sTotal").textContent = status.total_news;
     $("sNew").textContent = status.new_count;
@@ -157,6 +184,7 @@ async function loadAll() {
     renderKeywords(keywords.keywords || []);
     renderNews(news.news || [], news.total || 0);
     renderScans(scans.scans || []);
+    renderTrends(trends);
   } catch (err) {
     toast(err.message || "Veri çekilemedi");
   }
@@ -254,6 +282,16 @@ function bindEvents() {
 
   $("intervalSelect").addEventListener("change", (e) => {
     updateSettings({ interval_minutes: Number(e.target.value) });
+  });
+
+  $("refreshTrendsBtn").addEventListener("click", async () => {
+    try {
+      const trends = await api("trends/last-hour?force=1");
+      renderTrends(trends);
+      toast("Trend verisi güncellendi");
+    } catch (err) {
+      toast(err.message || "Trend verisi alınamadı");
+    }
   });
 
   document.querySelectorAll(".fbtn").forEach((btn) => {
