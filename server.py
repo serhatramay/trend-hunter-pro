@@ -603,17 +603,18 @@ def scan_now() -> dict:
                 )
                 new_articles += 1
             except sqlite3.IntegrityError:
-                # Existing link: refresh score and keyword.
+                # Existing link: refresh score to current value and keep record updated.
                 cur.execute(
                     """
                     UPDATE news
-                    SET trend_score = MAX(trend_score, ?),
-                        trend_signal = MAX(trend_signal, ?),
+                    SET trend_score = ?,
+                        trend_signal = ?,
                         keyword = ?,
-                        source = COALESCE(source, ?)
+                        source = COALESCE(source, ?),
+                        published_at = COALESCE(?, published_at)
                     WHERE link = ?
                     """,
-                    (score, signal, item["keyword"], item["source"], item["link"]),
+                    (score, signal, item["keyword"], item["source"], item["published_at"], item["link"]),
                 )
 
         cur.execute(
@@ -869,7 +870,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 "SELECT id, title, link, source, keyword, trend_score, trend_signal, "
                 "published_at, discovered_at, is_new, saved "
                 f"FROM news {where_sql} "
-                "ORDER BY trend_score DESC, datetime(discovered_at) DESC LIMIT ?"
+                "ORDER BY datetime(published_at) DESC, trend_score DESC, datetime(discovered_at) DESC LIMIT ?"
             )
             args.append(limit)
 
