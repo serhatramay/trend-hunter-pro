@@ -4,7 +4,8 @@ const state = {
   scanning: false,
   savedSet: new Set(),
   keywords: [],
-  relatedMode: "rising",
+  discoverMode: "rising",
+  discoverTimeframe: "1h",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -124,41 +125,15 @@ function renderNews(items, total) {
     .join("");
 }
 
-function renderTrends(payload) {
-  const root = $("trendsList");
-  const items = payload?.items || [];
-  $("trendsAt").textContent = `Güncelleme: ${payload?.generated_at ? fmtDate(payload.generated_at) : "-"}`;
-
-  if (!items.length) {
-    root.innerHTML = '<p class="muted">Trend verisi yok.</p>';
-    return;
-  }
-
-  root.innerHTML = items
-    .map((it) => {
-      const deltaClass = it.delta_20m > 0 ? "up" : it.delta_20m < 0 ? "down" : "";
-      const deltaPrefix = it.delta_20m > 0 ? "+" : "";
-      return `
-      <div class="trend-row">
-        <div class="trend-key" title="${escapeHtml(it.keyword)}">${escapeHtml(it.keyword)}</div>
-        <span class="trend-chip">Anlık ${it.latest_index}</span>
-        <span class="trend-chip">60dk ${it.avg_60m}</span>
-        <span class="trend-chip">20dk ${it.avg_20m}</span>
-        <span class="trend-chip ${deltaClass}">Δ20 ${deltaPrefix}${it.delta_20m}</span>
-      </div>`;
-    })
-    .join("");
-}
-
-function renderRelated(payload) {
-  const root = $("relatedList");
-  const kw = payload?.keyword || "";
-  const mode = state.relatedMode === "top" ? "top" : "rising";
-  const list = payload?.[mode] || [];
-  $("relatedMeta").textContent = `Keyword: ${kw || "-"}`;
+function renderDiscover(payload) {
+  const root = $("discoverList");
+  const mode = state.discoverMode === "top" ? "top" : "rising";
+  const list = payload?.items || [];
+  const src = payload?.source_keywords || [];
+  $("discoverMeta").textContent = `Kaynak keyword: ${src.length}`;
 
   if (!list.length) {
-    root.innerHTML = '<p class="muted">Bu keyword için ilişkili sorgu bulunamadı.</p>';
+    root.innerHTML = '<p class="muted">Bu aralıkta keşif sorgusu bulunamadı.</p>';
     return;
   }
 
@@ -168,9 +143,9 @@ function renderRelated(payload) {
       const fv = it.formatted_value || it.value || 0;
       return `
       <div class="related-row">
-        <div class="related-q">${escapeHtml(it.query)}</div>
+        <div class="related-q">${escapeHtml(it.query)} <span class="muted">(${escapeHtml((it.from_keywords || []).slice(0,2).join(", "))})</span></div>
         <div class="related-right">
-          <span class="trend-chip">${escapeHtml(String(fv))}</span>
+          <span class="trend-chip">${escapeHtml(mode === "rising" ? String(fv || "HIZLI ARTIŞ") : String(fv))}</span>
           <button class="btn btn-primary related-add-btn" data-q="${escapeHtml(it.query)}">+ Ekle</button>
         </div>
       </div>`;
@@ -195,7 +170,7 @@ async function loadAll() {
       api(`news?filter=${state.filter}&keyword=${encodeURIComponent(state.keywordFilter)}&limit=140`),
       api("scans"),
     ]);
-    const trends = await api("trends/last-hour");
+    const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
 
     $("sTotal").textContent = status.total_news;
     $("sNew").textContent = status.new_count;
@@ -215,11 +190,7 @@ async function loadAll() {
     renderKeywords(keywords.keywords || []);
     renderNews(news.news || [], news.total || 0);
     renderScans(scans.scans || []);
-    renderTrends(trends);
-
-    const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
-    const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}`);
-    renderRelated(related);
+    renderDiscover(discover);
   } catch (err) {
     toast(err.message || "Veri çekilemedi");
   }
@@ -326,35 +297,33 @@ function bindEvents() {
     updateSettings({ interval_minutes: Number(e.target.value) });
   });
 
-  $("refreshTrendsBtn").addEventListener("click", async () => {
+  $("refreshDiscoverBtn").addEventListener("click", async () => {
     try {
-      const trends = await api("trends/last-hour?force=1");
-      renderTrends(trends);
-      toast("Trend verisi güncellendi");
+      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}&force=1`);
+      renderDiscover(discover);
+      toast("Keşif verisi güncellendi");
     } catch (err) {
-      toast(err.message || "Trend verisi alınamadı");
+      toast(err.message || "Keşif verisi alınamadı");
     }
   });
 
-  $("refreshRelatedBtn").addEventListener("click", async () => {
-    try {
-      const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
-      const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}&force=1`);
-      renderRelated(related);
-      toast("İlişkili sorgular güncellendi");
-    } catch (err) {
-      toast(err.message || "İlişkili sorgular alınamadı");
-    }
-  });
-
-  document.querySelectorAll("[data-rel-mode]").forEach((btn) => {
+  document.querySelectorAll("[data-discover-mode]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      document.querySelectorAll("[data-rel-mode]").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll("[data-discover-mode]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      state.relatedMode = btn.dataset.relMode || "rising";
-      const relatedKeyword = state.keywordFilter || state.keywords[0] || "";
-      const related = await api(`trends/related?keyword=${encodeURIComponent(relatedKeyword)}`);
-      renderRelated(related);
+      state.discoverMode = btn.dataset.discoverMode || "rising";
+      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
+      renderDiscover(discover);
+    });
+  });
+
+  document.querySelectorAll("[data-discover-timeframe]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll("[data-discover-timeframe]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.discoverTimeframe = btn.dataset.discoverTimeframe || "1h";
+      const discover = await api(`discover?timeframe=${encodeURIComponent(state.discoverTimeframe)}&mode=${encodeURIComponent(state.discoverMode)}`);
+      renderDiscover(discover);
     });
   });
 
@@ -381,7 +350,7 @@ function bindEvents() {
     loadAll();
   });
 
-  $("relatedList").addEventListener("click", (e) => {
+  $("discoverList").addEventListener("click", (e) => {
     const addBtn = e.target.closest(".related-add-btn");
     if (!addBtn) return;
     const q = (addBtn.dataset.q || "").trim();

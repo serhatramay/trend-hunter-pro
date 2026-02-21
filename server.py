@@ -352,6 +352,76 @@ def cached_related_queries_for_keyword(
     return data
 
 
+def build_discover_queries(
+    keywords: list[str], timeframe: str, mode: str = "rising", force_refresh: bool = False
+) -> dict:
+    if not keywords:
+        return {
+            "generated_at": now_iso(),
+            "timeframe": timeframe,
+            "mode": mode,
+            "source_keywords": [],
+            "items": [],
+        }
+
+    rows = []
+    for kw in keywords:
+        try:
+            rel = cached_related_queries_for_keyword(
+                keyword=kw,
+                geo="TR",
+                timeframe=timeframe,
+                force_refresh=force_refresh,
+            )
+            rows.append(rel)
+        except Exception:
+            rows.append({"keyword": kw, "top": [], "rising": []})
+
+    pick_mode = "top" if mode == "top" else "rising"
+    merged: dict[str, dict] = {}
+    for rel in rows:
+        source_kw = rel.get("keyword", "")
+        items = rel.get(pick_mode, []) or []
+        for item in items:
+            q = (item.get("query") or "").strip()
+            if not q:
+                continue
+            key = normalize_text(q)
+            score = item.get("value", 0) or 0
+            entry = merged.get(key)
+            if not entry:
+                entry = {
+                    "query": q,
+                    "value": score,
+                    "formatted_value": item.get("formatted_value", ""),
+                    "from_keywords": [],
+                }
+                merged[key] = entry
+            entry["value"] = max(entry.get("value", 0), score)
+            if item.get("formatted_value"):
+                entry["formatted_value"] = item.get("formatted_value")
+            if source_kw and source_kw not in entry["from_keywords"]:
+                entry["from_keywords"].append(source_kw)
+
+    items = list(merged.values())
+    items.sort(
+        key=lambda x: (
+            1 if str(x.get("formatted_value", "")).lower() in ("breakout", "hizli artis", "hızlı artış") else 0,
+            int(x.get("value", 0) or 0),
+            len(x.get("from_keywords", [])),
+        ),
+        reverse=True,
+    )
+
+    return {
+        "generated_at": now_iso(),
+        "timeframe": timeframe,
+        "mode": pick_mode,
+        "source_keywords": keywords,
+        "items": items,
+    }
+
+
 def build_last_hour_trends(keywords: list[str]) -> dict:
     if not keywords:
         return {"generated_at": now_iso(), "items": []}
@@ -748,6 +818,31 @@ class AppHandler(BaseHTTPRequestHandler):
                     },
                     200,
                 )
+            return
+
+        if path == "/api/discover":
+            query = parse_qs(parsed.query)
+            timeframe_key = (query.get("timeframe", ["1h"])[0] or "1h").strip().lower()
+            mode = (query.get("mode", ["rising"])[0] or "rising").strip().lower()
+            force_refresh = (query.get("force", ["0"])[0] or "0") == "1"
+
+            timeframe = "now 4-H" if timeframe_key == "4h" else "now 1-H"
+            mode = "top" if mode == "top" else "rising"
+
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT keyword FROM keywords ORDER BY created_at DESC LIMIT 30"
+            ).fetchall()
+            conn.close()
+            keywords = [r["keyword"] for r in rows]
+
+            data = build_discover_queries(
+                keywords=keywords,
+                timeframe=timeframe,
+                mode=mode,
+                force_refresh=force_refresh,
+            )
+            json_response(self, data)
             return
 
         if path == "/api/news":
