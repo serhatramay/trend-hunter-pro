@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional, Union
-from urllib.parse import parse_qs, quote_plus, urlencode, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, unquote
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -456,13 +456,41 @@ def build_discover_queries(
     top_items = sort_discover_items(merge_related_rows(rows, "top"), "top")
     rising_items = sort_discover_items(merge_related_rows(rows, "rising"), "rising")
 
-    return {
+    result = {
         "generated_at": now_iso(),
         "timeframe": timeframe,
         "source_keywords": keywords,
         "top": paginate(top_items, page, per_page),
         "rising": paginate(rising_items, page, per_page),
     }
+    return result
+
+
+def build_discover_with_fallback(
+    keywords: list[str], timeframe: str, force_refresh: bool, page: int, per_page: int
+) -> dict:
+    primary = build_discover_queries(
+        keywords=keywords,
+        timeframe=timeframe,
+        force_refresh=force_refresh,
+        page=page,
+        per_page=per_page,
+    )
+    primary_empty = (
+        (primary.get("top", {}).get("total", 0) == 0) and
+        (primary.get("rising", {}).get("total", 0) == 0)
+    )
+    if timeframe == "now 1-H" and primary_empty:
+        fallback = build_discover_queries(
+            keywords=keywords,
+            timeframe="now 4-H",
+            force_refresh=force_refresh,
+            page=page,
+            per_page=per_page,
+        )
+        fallback["fallback_from"] = "now 1-H"
+        return fallback
+    return primary
 
 
 def build_last_hour_trends(keywords: list[str]) -> dict:
@@ -885,7 +913,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 conn.close()
                 keywords = [r["keyword"] for r in rows]
 
-            data = build_discover_queries(
+            data = build_discover_with_fallback(
                 keywords=keywords,
                 timeframe=timeframe,
                 force_refresh=force_refresh,
@@ -1026,15 +1054,18 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_api_delete(self, path: str) -> None:
         if path.startswith("/api/keywords/"):
             keyword = path.replace("/api/keywords/", "", 1).strip()
+            keyword = unquote(keyword)
             if not keyword:
                 json_response(self, {"error": "keyword gerekli"}, 400)
                 return
 
             conn = get_conn()
-            conn.execute("DELETE FROM keywords WHERE keyword = ?", (keyword,))
+            cur = conn.cursor()
+            cur.execute("DELETE FROM keywords WHERE keyword = ?", (keyword,))
+            deleted = cur.rowcount
             conn.commit()
             conn.close()
-            json_response(self, {"success": True})
+            json_response(self, {"success": True, "deleted": deleted})
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
