@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trend Hunter Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-a"></div>
+  <div class="bg-glow bg-glow-b"></div>
+
+  <header class="topbar">
+    <div>
+      <h1>Trend Hunter <span>Pro</span></h1>
+      <p>Google News + Trends ile erken sinyal avı</p>
+    </div>
+    <div class="status-pill" id="statusPill">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Hazır</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="left-col">
+      <article class="panel">
+        <h2>Anahtar Kelimeler</h2>
+        <p class="sub">Hızlı tarama için odak listeni büyüt.</p>
+        <div class="kw-input-row">
+          <input id="kwInput" type="text" placeholder="ornek: deprem, secim, kripto" />
+          <button id="kwAddBtn" class="btn btn-primary">Ekle</button>
+        </div>
+        <div id="kwList" class="kw-list"></div>
+      </article>
+
+      <article class="panel">
+        <h2>Tarama Kontrol</h2>
+        <div class="scan-actions">
+          <button id="scanBtn" class="btn btn-accent">Hemen Tara</button>
+          <button id="markSeenBtn" class="btn btn-ghost">Yenileri Temizle</button>
+        </div>
+
+        <div class="setting-row">
+          <label>Otomatik Tarama</label>
+          <input id="autoToggle" type="checkbox" />
+        </div>
+        <div class="setting-row">
+          <label>Aralık (dk)</label>
+          <select id="intervalSelect">
+            <option value="2">2</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+            <option value="30">30</option>
+            <option value="60">60</option>
+          </select>
+        </div>
+        <p class="muted" id="lastScanInfo">Son tarama: -</p>
+      </article>
+
+      <article class="panel">
+        <h2>Tarama Geçmişi</h2>
+        <div id="scanHistory" class="scan-history"></div>
+      </article>
+    </section>
+
+    <section class="right-col">
+      <div class="stats-grid">
+        <div class="stat-card"><span>Toplam Haber</span><strong id="sTotal">0</strong></div>
+        <div class="stat-card"><span>Yeni</span><strong id="sNew">0</strong></div>
+        <div class="stat-card"><span>Kaydedilen</span><strong id="sSaved">0</strong></div>
+        <div class="stat-card"><span>Tarama</span><strong id="sScan">0</strong></div>
+        <div class="stat-card"><span>Kelime</span><strong id="sKw">0</strong></div>
+      </div>
+
+      <article class="panel news-panel">
+        <div class="news-head">
+          <h2>Haber Akışı</h2>
+          <div class="filters">
+            <button class="fbtn active" data-filter="all">Tümü</button>
+            <button class="fbtn" data-filter="new">Yeni</button>
+            <button class="fbtn" data-filter="saved">Kaydedilen</button>
+          </div>
+        </div>
+
+        <div id="newsMeta" class="news-meta">0 sonuç</div>
+        <div id="newsList" class="news-list"></div>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
