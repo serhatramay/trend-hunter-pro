@@ -247,77 +247,6 @@ input:focus, select:focus {
 }
 
 .news-panel { min-height: 520px; }
-.trends-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.discover-grid {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.discover-col {
-  min-width: 0;
-}
-
-.discover-col-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.discover-col-head h3 {
-  margin: 0;
-  font-size: 14px;
-}
-
-.discover-pager {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-.related-list {
-  margin-top: 10px;
-  max-height: 260px;
-  overflow: auto;
-  display: grid;
-  gap: 6px;
-}
-
-.related-row {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  background: #fcfdff;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-}
-
-.related-q {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.related-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.related-add-btn {
-  padding: 5px 8px;
-  font-size: 11px;
-}
-
 .trend-row {
   border: 1px solid var(--border);
   background: #fcfdff;
@@ -489,5 +418,4 @@ input:focus, select:focus {
 @media (max-width: 1060px) {
   .layout { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .discover-grid { grid-template-columns: 1fr; }
 }
