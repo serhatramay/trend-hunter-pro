@@ -37,6 +37,21 @@ TRENDS_CACHE: dict = {
     "data": {"generated_at": "", "items": []},
 }
 RELATED_CACHE: dict = {}
+DEFAULT_KEYWORDS = [
+    "kimdir",
+    "ne zaman",
+    "nedir",
+    "nerede",
+    "neden",
+    "yeni bölüm",
+    "sevgilisi",
+    "annesi",
+    "babası",
+    "toki",
+    "temettü",
+    "yorumlar",
+    "hisse",
+]
 
 
 def now_iso() -> str:
@@ -100,6 +115,14 @@ def init_db() -> None:
         cur.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
             (key, value),
+        )
+
+    # Seed core tracking keywords; keep user-added keywords intact.
+    seed_time = now_iso()
+    for kw in DEFAULT_KEYWORDS:
+        cur.execute(
+            "INSERT OR IGNORE INTO keywords(keyword, created_at) VALUES (?, ?)",
+            (kw, seed_time),
         )
 
     conn.commit()
