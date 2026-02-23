@@ -810,6 +810,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 ctype = "text/css; charset=utf-8"
             elif file_path.suffix == ".js":
                 ctype = "application/javascript; charset=utf-8"
+            elif file_path.suffix == ".svg":
+                ctype = "image/svg+xml"
+            elif file_path.suffix == ".ico":
+                ctype = "image/x-icon"
+            elif file_path.suffix == ".png":
+                ctype = "image/png"
             else:
                 ctype = "application/octet-stream"
             self.serve_file(file_path, ctype)
